@@ -1,0 +1,196 @@
+
+"use client"
+
+import { useState, useEffect, useCallback } from 'react';
+import { useParams, notFound, useRouter } from 'next/navigation';
+import { useAuth } from '@/context/auth-context';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Github, Linkedin, Twitter, Edit, Code, Star, Bookmark } from 'lucide-react';
+import DashboardClientPage from '../../dashboard-client-page';
+import { EditProfileDialog } from '@/components/edit-profile-dialog';
+import type { Snippet } from '@/types/snippet';
+import { findUserByUsername, updateUserProfile as updateUserProfileInDb, getSavedSnippets, getStarredSnippets, getPublicSnippetsForUser } from '@/lib/firebase/firestore';
+import ProfileLoading from './loading';
+import { UserProfile } from '@/types/user';
+import { useToast } from '@/hooks/use-toast';
+
+export default function ProfilePage() {
+    const params = useParams();
+    const router = useRouter();
+    const { toast } = useToast();
+    const { user: currentUser, loading: authLoading } = useAuth();
+    const username = params.username as string;
+    const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
+    
+    const [profileUser, setProfileUser] = useState<UserProfile | null>(null);
+    const [userSnippets, setUserSnippets] = useState<Snippet[]>([]);
+    const [isLoading, setIsLoading] = useState(true);
+    const [stats, setStats] = useState({ saved: 0, starred: 0 });
+
+    const isOwnProfile = currentUser?.uid === profileUser?.uid;
+
+    const fetchProfileData = useCallback(async () => {
+        if (!username) return;
+        setIsLoading(true);
+        
+        try {
+            const foundUser = await findUserByUsername(username);
+
+            if (foundUser) {
+                setProfileUser(foundUser);
+                const publicSnippets = await getPublicSnippetsForUser(foundUser.uid);
+                setUserSnippets(publicSnippets);
+
+                if (currentUser?.uid === foundUser.uid) {
+                    const [saved, starred] = await Promise.all([
+                        getSavedSnippets(currentUser.uid),
+                        getStarredSnippets(currentUser.uid)
+                    ]);
+                    setStats({ saved: saved.length, starred: starred.length });
+                }
+
+            } else {
+                setProfileUser(null);
+            }
+        } catch (error) {
+            console.error("Failed to fetch profile data", error);
+            toast({
+                variant: 'destructive',
+                title: 'Error',
+                description: 'Could not load profile.',
+            });
+            setProfileUser(null);
+        } finally {
+            setIsLoading(false);
+        }
+    }, [username, currentUser?.uid, toast]);
+
+    useEffect(() => {
+        if (!authLoading) {
+            fetchProfileData();
+        }
+    }, [username, authLoading, fetchProfileData]);
+
+    const handleProfileUpdate = async (updatedProfile: Partial<UserProfile>) => {
+        if (profileUser && currentUser) {
+            try {
+                await updateUserProfileInDb(currentUser.uid, updatedProfile);
+                
+                const newUsername = updatedProfile.username;
+                const oldUsername = profileUser.username;
+
+                setProfileUser(prev => prev ? { ...prev, ...updatedProfile } : null);
+                
+                toast({
+                    title: "Profile Updated",
+                    description: "Your profile has been successfully updated.",
+                });
+                setIsEditDialogOpen(false);
+
+                if (newUsername && newUsername !== oldUsername) {
+                    router.replace(`/dashboard/profile/${newUsername}`);
+                }
+
+            } catch (error: any) {
+                toast({
+                    variant: 'destructive',
+                    title: 'Update Failed',
+                    description: error.message || "Could not update profile.",
+                });
+            }
+        }
+    }
+
+
+    if (isLoading) {
+        return <ProfileLoading />;
+    }
+
+    if (!profileUser) {
+        return notFound();
+    }
+
+    return (
+        <>
+        <div className="animate-fade-in-up">
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                {/* Left Column - Profile Info & Stats */}
+                <div className="lg:col-span-4 xl:col-span-3 space-y-6">
+                     <Card className="glassmorphic">
+                        <CardContent className="p-6">
+                            <div className="flex flex-col items-center space-y-4">
+                                <Avatar className="h-24 w-24 border-2 border-primary">
+                                    <AvatarImage src={profileUser.avatar} alt={profileUser.name} />
+                                    <AvatarFallback>{profileUser.name?.charAt(0)}</AvatarFallback>
+                                </Avatar>
+                                <div className="text-center">
+                                    <h1 className="text-2xl font-bold font-headline">{profileUser.name}</h1>
+                                    <p className="text-muted-foreground">@{profileUser.username}</p>
+                                </div>
+                                <p className="text-center text-sm text-muted-foreground">{profileUser.bio}</p>
+
+                                 {isOwnProfile && (
+                                    <Button onClick={() => setIsEditDialogOpen(true)} className="w-full bg-gradient-to-r from-indigo-500 to-violet-500 text-white hover:opacity-90 transition-opacity">
+                                        <Edit className="mr-2 h-4 w-4" /> Edit Profile
+                                    </Button>
+                                )}
+
+                                <div className="flex space-x-4 pt-2">
+                                    {profileUser.social?.github && <a href={profileUser.social.github} target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-primary"><Github /></a>}
+                                    {profileUser.social?.twitter && <a href={profileUser.social.twitter} target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-primary"><Twitter /></a>}
+                                    {profileUser.social?.linkedin && <a href={profileUser.social.linkedin} target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-primary"><Linkedin /></a>}
+                                </div>
+                            </div>
+                        </CardContent>
+                    </Card>
+
+                     <Card className="glassmorphic">
+                        <CardHeader>
+                            <CardTitle className="font-headline text-lg">Stats</CardTitle>
+                        </CardHeader>
+                        <CardContent className="space-y-4 text-sm">
+                           <div className="flex items-center justify-between">
+                                <span className="flex items-center text-muted-foreground">
+                                    <Code className="mr-2 h-4 w-4" /> Public Snippets
+                                </span>
+                                <span className="font-semibold">{userSnippets.length}</span>
+                           </div>
+                           {isOwnProfile && (
+                             <>
+                                <div className="flex items-center justify-between">
+                                    <span className="flex items-center text-muted-foreground">
+                                        <Star className="mr-2 h-4 w-4" /> Snippets Starred
+                                    </span>
+                                    <span className="font-semibold">{stats.starred}</span>
+                               </div>
+                               <div className="flex items-center justify-between">
+                                    <span className="flex items-center text-muted-foreground">
+                                        <Bookmark className="mr-2 h-4 w-4" /> Snippets Saved
+                                    </span>
+                                    <span className="font-semibold">{stats.saved}</span>
+                               </div>
+                             </>
+                           )}
+                        </CardContent>
+                    </Card>
+                </div>
+
+                {/* Right Column - Public Snippets */}
+                <div className="lg:col-span-8 xl:col-span-9">
+                   <DashboardClientPage snippets={userSnippets} title={`${isOwnProfile ? 'Your' : ''} Public Snippets`} collectionType="public-profile"/>
+                </div>
+            </div>
+        </div>
+        {isOwnProfile && profileUser && (
+            <EditProfileDialog 
+                isOpen={isEditDialogOpen} 
+                onOpenChange={setIsEditDialogOpen} 
+                currentUserProfile={profileUser}
+                onProfileUpdate={handleProfileUpdate}
+            />
+        )}
+        </>
+    )
+}
